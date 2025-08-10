@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Chrome Keep Alive",
+  "version": "1.0",
+  "description": "Prevents RDP and web sessions from timing out by sending periodic keystrokes",
+  "permissions": [
+    "activeTab",
+    "storage"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Chrome Keep Alive"
+  }
+}
