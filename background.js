@@ -2,10 +2,22 @@ let keepAliveEnabled = false;
 let intervalId = null;
 let currentTabId = null;
 
-chrome.runtime.onStartup.addListener(() => {
+chrome.runtime.onStartup.addListener(async () => {
+  console.log('Service worker startup');
+  // Get current active tab
+  try {
+    const tabs = await chrome.tabs.query({active: true, currentWindow: true});
+    if (tabs[0]) {
+      currentTabId = tabs[0].id;
+    }
+  } catch (e) {
+    console.log('Failed to get active tab on startup:', e);
+  }
+  
   chrome.storage.sync.get(['enabled', 'interval'], (result) => {
     keepAliveEnabled = result.enabled || false;
     const interval = result.interval || 5;
+    console.log('Startup - enabled:', keepAliveEnabled, 'interval:', interval);
     if (keepAliveEnabled) {
       startKeepAlive(interval);
     }
@@ -48,10 +60,84 @@ function startKeepAlive(intervalMinutes) {
   
   const intervalMs = intervalMinutes * 60 * 1000;
   
-  intervalId = setInterval(() => {
+  intervalId = setInterval(async () => {
+    // Get active tab if currentTabId is null
+    if (!currentTabId) {
+      try {
+        const tabs = await chrome.tabs.query({active: true, currentWindow: true});
+        if (tabs[0]) {
+          currentTabId = tabs[0].id;
+        }
+      } catch (e) {
+        console.log('Failed to get active tab:', e);
+        return;
+      }
+    }
+    
     if (currentTabId) {
-      chrome.tabs.sendMessage(currentTabId, { action: 'sendKeystroke' }).catch(() => {
-        // Tab might not have content script loaded, ignore error
+      // Inject script directly using scripting API (works in Chrome apps)
+      chrome.scripting.executeScript({
+        target: { tabId: currentTabId },
+        func: () => {
+          console.log('Keep alive: Injecting activity into Guacamole');
+          
+          // Find Guacamole canvas
+          const canvas = document.querySelector('canvas') || 
+                        document.querySelector('[data-guac-display]') ||
+                        document.querySelector('#display');
+          
+          if (canvas) {
+            console.log('Found canvas, sending mouse events');
+            const rect = canvas.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+            
+            // Tiny mouse movement
+            const mouseEvent = new MouseEvent('mousemove', {
+              bubbles: true,
+              cancelable: true,
+              clientX: centerX + Math.floor(Math.random() * 3) - 1,
+              clientY: centerY + Math.floor(Math.random() * 3) - 1,
+              view: window
+            });
+            canvas.dispatchEvent(mouseEvent);
+            
+            // Also try mouse down/up for more activity
+            const mouseDown = new MouseEvent('mousedown', {
+              bubbles: true,
+              cancelable: true,
+              button: 0,
+              clientX: centerX,
+              clientY: centerY
+            });
+            
+            const mouseUp = new MouseEvent('mouseup', {
+              bubbles: true,
+              cancelable: true,
+              button: 0,
+              clientX: centerX,
+              clientY: centerY
+            });
+            
+            canvas.dispatchEvent(mouseDown);
+            setTimeout(() => canvas.dispatchEvent(mouseUp), 1);
+            
+            return { success: true, method: 'canvas' };
+          } else {
+            console.log('No canvas found, sending document events');
+            document.dispatchEvent(new Event('focus'));
+            return { success: true, method: 'document' };
+          }
+        }
+      }).then((results) => {
+        if (results && results[0] && results[0].result && results[0].result.success) {
+          chrome.storage.sync.set({ lastActivity: Date.now() });
+          console.log('Keep alive: successfully injected script, method:', results[0].result.method);
+        } else {
+          console.log('Keep alive: script injection failed');
+        }
+      }).catch((error) => {
+        console.log('Script injection error:', error);
       });
     }
   }, intervalMs);
@@ -65,27 +151,47 @@ function stopKeepAlive() {
 }
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  console.log('Message received:', request.action);
+  
   if (request.action === 'toggle') {
-    keepAliveEnabled = !keepAliveEnabled;
-    chrome.storage.sync.set({ enabled: keepAliveEnabled });
+    // Get current tab when toggling
+    chrome.tabs.query({active: true, currentWindow: true}).then(tabs => {
+      if (tabs[0]) {
+        currentTabId = tabs[0].id;
+        console.log('Set currentTabId to:', currentTabId);
+      }
+      
+      keepAliveEnabled = !keepAliveEnabled;
+      chrome.storage.sync.set({ enabled: keepAliveEnabled });
+      console.log('Toggled to:', keepAliveEnabled);
+      
+      if (keepAliveEnabled) {
+        chrome.storage.sync.get(['interval'], (result) => {
+          console.log('Starting keep alive with interval:', result.interval || 5);
+          startKeepAlive(result.interval || 5);
+        });
+      } else {
+        stopKeepAlive();
+      }
+      
+      sendResponse({ enabled: keepAliveEnabled });
+    }).catch(e => {
+      console.log('Failed to get tab on toggle:', e);
+      sendResponse({ enabled: false });
+    });
     
-    if (keepAliveEnabled) {
-      chrome.storage.sync.get(['interval'], (result) => {
-        startKeepAlive(result.interval || 5);
-      });
-    } else {
-      stopKeepAlive();
-    }
+    return true; // Keep message channel open for async response
     
-    sendResponse({ enabled: keepAliveEnabled });
   } else if (request.action === 'setInterval') {
     chrome.storage.sync.set({ interval: request.interval });
+    console.log('Set interval to:', request.interval);
     
     if (keepAliveEnabled) {
       startKeepAlive(request.interval);
     }
     
     sendResponse({ success: true });
+    
   } else if (request.action === 'getStatus') {
     chrome.storage.sync.get(['enabled', 'interval'], (result) => {
       sendResponse({

@@ -9,6 +9,9 @@ document.addEventListener('DOMContentLoaded', () => {
     updateStatus(response.enabled);
   });
   
+  // Update last activity timestamp
+  updateLastActivity();
+  
   enableToggle.addEventListener('change', () => {
     chrome.runtime.sendMessage({ action: 'toggle' }, (response) => {
       updateStatus(response.enabled);
@@ -34,4 +37,19 @@ document.addEventListener('DOMContentLoaded', () => {
       statusDiv.className = 'status inactive';
     }
   }
+  
+  function updateLastActivity() {
+    const lastActivityDiv = document.getElementById('lastActivity');
+    chrome.storage.sync.get(['lastActivity'], (result) => {
+      if (result.lastActivity) {
+        const date = new Date(result.lastActivity);
+        lastActivityDiv.textContent = `Last activity: ${date.toLocaleTimeString()}`;
+      } else {
+        lastActivityDiv.textContent = 'Last activity: Never';
+      }
+    });
+  }
+  
+  // Refresh activity timestamp every 2 seconds
+  setInterval(updateLastActivity, 2000);
 });
